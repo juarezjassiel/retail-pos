@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Retail POS Terminal</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @media print {
+      body * { visibility: hidden; }
+      #printable-receipt, #printable-receipt * { visibility: visible; }
+      #printable-receipt { position: absolute; left: 0; top: 0; width: 80mm; font-size: 12px; }
+    }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100 h-screen overflow-hidden flex flex-col font-sans select-none">
+
+  <!-- PIN Pad Login Lock Screen Overlay -->
+  <div id="login-overlay" class="fixed inset-0 bg-slate-950/95 backdrop-blur-md flex items-center justify-center p-4 z-50">
+    <div class="bg-slate-900 border border-slate-700 w-full max-w-sm rounded-2xl p-6 shadow-2xl mono text-center">
+      <div class="inline-flex items-center space-x-2 mb-2">
+        <div class="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping"></div>
+        <span class="text-xs text-cyan-400 tracking-widest uppercase font-bold">TERMINAL LOCKED</span>
+      </div>
+      <h2 class="text-xl font-extrabold text-white mb-1">CORNER MARKET POS</h2>
+      <p class="text-xs text-slate-400 mb-4">Enter 4-Digit Operator PIN to Sign On</p>
+
+      <input 
+        id="pin-input" 
+        type="password" 
+        maxlength="4" 
+        readonly
+        placeholder="••••"
+        class="w-full bg-slate-950 border border-slate-700 rounded-xl py-3 text-center text-3xl tracking-[1em] text-cyan-400 font-bold mb-2 focus:outline-none"
+      >
+      <div id="login-error" class="text-rose-400 text-xs h-5 mb-2 font-semibold"></div>
+
+      <!-- Touch Numeric Keypad -->
+      <div class="grid grid-cols-3 gap-2.5 mb-4">
+        <button onclick="appendPin('1')" class="bg-slate-800 hover:bg-slate-700 active:bg-cyan-600 text-white font-bold py-3.5 rounded-xl text-lg transition">1</button>
+        <button onclick="appendPin('2')" class="bg-slate-800 hover:bg-slate-700 active:bg-cyan-600 text-white font-bold py-3.5 rounded-xl text-lg transition">2</button>
+        <button onclick="appendPin('3')" class="bg-slate-800 hover:bg-slate-700 active:bg-cyan-600 text-white font-bold py-3.5 rounded-xl text-lg transition">3</button>
+        <button onclick="appendPin('4')" class="bg-slate-800 hover:bg-slate-700 active:bg-cyan-600 text-white font-bold py-3.5 rounded-xl text-lg transition">4</button>
+        <button onclick="appendPin('5')" class="bg-slate-800 hover:bg-slate-700 active:bg-cyan-600 text-white font-bold py-3.5 rounded-xl text-lg transition">5</button>
+        <button onclick="appendPin('6')" class="bg-slate-800 hover:bg-slate-700 active:bg-cyan-600 text-white font-bold py-3.5 rounded-xl text-lg transition">6</button>
+        <button onclick="appendPin('7')" class="bg-slate-800 hover:bg-slate-700 active:bg-cyan-600 text-white font-bold py-3.5 rounded-xl text-lg transition">7</button>
+        <button onclick="appendPin('8')" class="bg-slate-800 hover:bg-slate-700 active:bg-cyan-600 text-white font-bold py-3.5 rounded-xl text-lg transition">8</button>
+        <button onclick="appendPin('9')" class="bg-slate-800 hover:bg-slate-700 active:bg-cyan-600 text-white font-bold py-3.5 rounded-xl text-lg transition">9</button>
+        <button onclick="clearPin()" class="bg-rose-900/60 hover:bg-rose-800 text-rose-200 font-bold py-3.5 rounded-xl text-xs transition">CLR</button>
+        <button onclick="appendPin('0')" class="bg-slate-800 hover:bg-slate-700 active:bg-cyan-600 text-white font-bold py-3.5 rounded-xl text-lg transition">0</button>
+        <button onclick="submitLogin()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3.5 rounded-xl text-xs transition">SIGN ON</button>
+      </div>
+
+      <div class="text-[11px] text-slate-500 border-t border-slate-800 pt-3 flex justify-between">
+        <span>Manager PIN: <strong class="text-slate-300">1234</strong></span>
+        <span>Cashier PIN: <strong class="text-slate-300">0000</strong></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Header / Status Bar -->
+  <header class="bg-slate-800 border-b border-slate-700 px-6 py-3 flex items-center justify-between">
+    <div class="flex items-center space-x-3">
+      <div class="w-3 h-3 rounded-full bg-emerald-500 animate-pulse"></div>
+      <h1 class="font-bold text-lg tracking-wider mono text-cyan-400">REGISTER #01 • ONLINE</h1>
+    </div>
+    <div class="flex items-center space-x-4 text-sm mono text-slate-400">
+      <span>OPERATOR: <strong id="active-cashier" class="text-white">LOCKED</strong> <span id="active-role" class="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-cyan-300 ml-1">--</span></span>
+      <span>STORE: <strong class="text-white">TX-76701</strong></span>
+      <span id="clock" class="text-white font-semibold">--:--:--</span>
+      <button id="audit-btn" onclick="openAuditModal()" class="bg-amber-600 hover:bg-amber-500 text-white px-3 py-1 rounded-lg font-bold text-xs transition">
+        [F3] MANAGER CONSOLE
+      </button>
+      <button onclick="lockTerminal()" class="bg-rose-600/80 hover:bg-rose-600 text-white px-3 py-1 rounded-lg font-bold text-xs transition">
+        [F4] SIGN OFF
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Workstation Layout -->
+  <main class="flex-1 grid grid-cols-12 gap-4 p-4 overflow-hidden">
+    
+    <!-- LEFT: Fast-Keys / Category Catalog (7 cols) -->
+    <section class="col-span-7 flex flex-col bg-slate-800/60 border border-slate-700/80 rounded-xl p-4 overflow-hidden">
+      <div class="mb-4">
+        <label class="block text-xs uppercase mono text-slate-400 mb-1">Barcode Scanner / SKU Entry (Press Enter)</label>
+        <div class="flex space-x-2">
+          <input 
+            type="text" 
+            id="barcode-input" 
+            placeholder="Scan UPC or type barcode (e.g. 012000000133)..." 
+            class="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-white mono focus:outline-none focus:border-cyan-500 text-sm"
+          >
+          <button onclick="handleManualScan()" class="bg-cyan-600 hover:bg-cyan-500 text-white px-5 py-2 rounded-lg font-bold mono text-sm transition">
+            SCAN
+          </button>
+        </div>
+      </div>
+
+      <!-- Quick Touch Categories -->
+      <div class="flex space-x-2 mb-3 overflow-x-auto pb-1 text-xs mono">
+        <button onclick="filterCategory('all')" class="cat-btn px-3 py-1.5 rounded-lg bg-cyan-600 text-white font-bold">ALL ITEMS</button>
+        <button onclick="filterCategory('beverage')" class="cat-btn px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">BEVERAGES</button>
+        <button onclick="filterCategory('snacks')" class="cat-btn px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">SNACKS</button>
+        <button onclick="filterCategory('grocery')" class="cat-btn px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">GROCERY</button>
+      </div>
+
+      <!-- Product Fast Grid -->
+      <div id="product-grid" class="flex-1 grid grid-cols-3 gap-3 overflow-y-auto pr-1"></div>
+    </section>
+
+    <!-- RIGHT: Active Ticket & Tender Panel (5 cols) -->
+    <section class="col-span-5 flex flex-col bg-slate-800 border border-slate-700 rounded-xl p-4 overflow-hidden">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-700 text-xs mono text-slate-400">
+        <span>CURRENT TRANSACTION</span>
+        <button onclick="clearCart()" class="text-rose-400 hover:text-rose-300 font-semibold">[CLEAR TICKET]</button>
+      </div>
+
+      <div id="cart-items" class="flex-1 overflow-y-auto my-3 space-y-2 pr-1">
+        <div class="h-full flex items-center justify-center text-slate-500 mono text-sm">
+          Awaiting scanned items...
+        </div>
+      </div>
+
+      <div class="border-t border-slate-700 pt-3 space-y-1.5 mono text-sm">
+        <div class="flex justify-between text-slate-400">
+          <span>SUBTOTAL</span>
+          <span id="summary-subtotal" class="text-slate-200">$0.00</span>
+        </div>
+        <div class="flex justify-between text-slate-400">
+          <span>TX SALES TAX (8.25%)</span>
+          <span id="summary-tax" class="text-slate-200">$0.00</span>
+        </div>
+        <div class="flex justify-between text-lg font-bold border-t border-slate-700/80 pt-2 text-white">
+          <span>BALANCE DUE</span>
+          <span id="summary-total" class="text-cyan-400 text-xl">$0.00</span>
+        </div>
+      </div>
+
+      <div class="mt-4 grid grid-cols-2 gap-3">
+        <button onclick="openCashModal()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-lg text-center mono tracking-wide transition shadow-lg">
+          [F1] CASH
+        </button>
+        <button onclick="processCardPayment()" class="bg-sky-600 hover:bg-sky-500 text-white font-bold py-3 rounded-lg text-center mono tracking-wide transition shadow-lg">
+          [F2] CARD / EMV
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <!-- Cash Tender Modal -->
+  <div id="cash-modal" class="hidden fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+    <div class="bg-slate-800 border border-slate-700 w-full max-w-md rounded-2xl p-6 shadow-2xl mono">
+      <h3 class="text-lg font-bold text-white mb-2">CASH PAYMENT</h3>
+      <div class="bg-slate-950 p-4 rounded-xl border border-slate-700 mb-4 text-center">
+        <span class="text-xs text-slate-400 uppercase">Total Due</span>
+        <div id="modal-due" class="text-3xl font-extrabold text-cyan-400">$0.00</div>
+      </div>
+
+      <div class="grid grid-cols-3 gap-2 mb-4">
+        <button onclick="tenderPreset('exact')" class="bg-slate-700 hover:bg-slate-600 text-white font-bold py-2 rounded-lg text-sm">EXACT</button>
+        <button onclick="tenderPreset(500)" class="bg-slate-700 hover:bg-slate-600 text-white font-bold py-2 rounded-lg text-sm">$5.00</button>
+        <button onclick="tenderPreset(1000)" class="bg-slate-700 hover:bg-slate-600 text-white font-bold py-2 rounded-lg text-sm">$10.00</button>
+        <button onclick="tenderPreset(2000)" class="bg-slate-700 hover:bg-slate-600 text-white font-bold py-2 rounded-lg text-sm">$20.00</button>
+        <button onclick="tenderPreset(5000)" class="bg-slate-700 hover:bg-slate-600 text-white font-bold py-2 rounded-lg text-sm">$50.00</button>
+        <button onclick="tenderPreset(10000)" class="bg-slate-700 hover:bg-slate-600 text-white font-bold py-2 rounded-lg text-sm">$100.00</button>
+      </div>
+
+      <label class="block text-xs uppercase text-slate-400 mb-1">Amount Tendered ($)</label>
+      <input type="number" step="0.01" id="cash-tendered-input" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-xl text-white text-right focus:outline-none focus:border-emerald-500 mb-4" placeholder="0.00">
+
+      <div class="flex space-x-3">
+        <button onclick="closeCashModal()" class="flex-1 bg-slate-700 hover:bg-slate-600 text-slate-200 py-3 rounded-lg font-bold">CANCEL</button>
+        <button onclick="finalizeCashTransaction()" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-3 rounded-lg font-bold">COMPLETE [ENTER]</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Thermal Receipt Modal -->
+  <div id="receipt-modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
+    <div class="bg-white text-black p-6 rounded-lg w-80 font-mono text-xs shadow-2xl flex flex-col" id="printable-receipt">
+      <div class="text-center pb-2 border-b border-black">
+        <h2 class="font-bold text-sm tracking-wide">JJs MARKET #104</h2>
+        <p>1200 S University Parks Dr</p>
+        <p>Waco, TX 76706</p>
+        <p id="receipt-date" class="mt-1">--</p>
+        <p id="receipt-operator" class="text-[10px]">OPERATOR: JJ-8042</p>
+      </div>
+      <div id="receipt-items" class="py-2 border-b border-black space-y-1"></div>
+      <div class="py-2 border-b border-black space-y-1">
+        <div class="flex justify-between"><span>SUBTOTAL</span><span id="rec-subtotal">$0.00</span></div>
+        <div class="flex justify-between"><span>TAX (8.25%)</span><span id="rec-tax">$0.00</span></div>
+        <div class="flex justify-between font-bold text-sm pt-1 border-t border-dotted border-black"><span>TOTAL</span><span id="rec-total">$0.00</span></div>
+        <div class="flex justify-between pt-1"><span>TENDERED</span><span id="rec-tendered">$0.00</span></div>
+        <div class="flex justify-between font-bold"><span>CHANGE DUE</span><span id="rec-change">$0.00</span></div>
+      </div>
+      <div class="text-center pt-3 text-[10px] space-y-1">
+        <p>THANK YOU FOR SHOPPING LOCAL!</p>
+        <p id="rec-id" class="tracking-widest font-bold">TXN-000000</p>
+      </div>
+      <div class="mt-4 flex space-x-2 no-print">
+        <button onclick="window.print()" class="flex-1 bg-slate-800 text-white py-2 rounded text-xs font-sans font-bold">PRINT TICKET</button>
+        <button onclick="closeReceiptModal()" class="flex-1 bg-slate-200 text-slate-800 py-2 rounded text-xs font-sans font-bold">DONE</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3-Tab Manager Back-Office Console Modal -->
+  <div id="audit-modal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+    <div class="bg-slate-800 border border-slate-700 w-full max-w-3xl rounded-2xl p-6 shadow-2xl mono flex flex-col max-h-[85vh]">
+      
+      <!-- Modal Header -->
+      <div class="flex justify-between items-center border-b border-slate-700 pb-3 mb-4">
+        <div class="flex items-center space-x-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
+          <h3 class="text-lg font-bold text-amber-400">MANAGER BACK-OFFICE CONSOLE</h3>
+        </div>
+        <button onclick="closeAuditModal()" class="text-slate-400 hover:text-white font-bold text-xs bg-slate-700 px-3 py-1 rounded">[ESC] CLOSE</button>
+      </div>
+
+      <!-- Navigation Tabs -->
+      <div class="flex space-x-2 border-b border-slate-700 pb-3 mb-4 text-xs">
+        <button id="tab-btn-zreport" onclick="switchManagerTab('zreport')" class="px-4 py-2 rounded-lg bg-amber-600 text-white font-bold">1. Z-REPORT & VOIDS</button>
+        <button id="tab-btn-products" onclick="switchManagerTab('products')" class="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 font-bold">2. ADD / RESTOCK PRODUCTS</button>
+        <button id="tab-btn-users" onclick="switchManagerTab('users')" class="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 font-bold">3. STAFF & PIN SETUP</button>
+      </div>
+
+      <!-- TAB 1: Z-Report & Recent Transactions (Voidable) -->
+      <div id="mgr-tab-zreport" class="flex-1 overflow-y-auto space-y-4 pr-1">
+        <div class="grid grid-cols-4 gap-3">
+          <div class="bg-slate-950 p-3 rounded-lg border border-slate-700">
+            <div class="text-[10px] text-slate-400">NET TRANSACTIONS</div>
+            <div id="z-count" class="text-xl font-bold text-white mt-1">0</div>
+          </div>
+          <div class="bg-slate-950 p-3 rounded-lg border border-slate-700">
+            <div class="text-[10px] text-slate-400">GROSS SALES</div>
+            <div id="z-total" class="text-xl font-bold text-cyan-400 mt-1">$0.00</div>
+          </div>
+          <div class="bg-slate-950 p-3 rounded-lg border border-slate-700">
+            <div class="text-[10px] text-slate-400">NET CASH IN DRAWER</div>
+            <div id="z-cash" class="text-xl font-bold text-emerald-400 mt-1">$0.00</div>
+          </div>
+          <div class="bg-slate-950 p-3 rounded-lg border border-slate-700">
+            <div class="text-[10px] text-slate-400">CARD / EMV TOTAL</div>
+            <div id="z-card" class="text-xl font-bold text-sky-400 mt-1">$0.00</div>
+          </div>
+        </div>
+
+        <div>
+          <div class="flex justify-between items-center mb-2">
+            <h4 class="text-xs uppercase text-slate-400">Recent Transactions (Click Void to Refund & Restore Stock)</h4>
+            <button onclick="window.open(`${API_URL}/reports/export-csv`, '_blank')" class="bg-cyan-600 hover:bg-cyan-500 text-white px-3 py-1.5 rounded-lg font-bold text-xs transition shadow">
+              📥 EXPORT SALES CSV
+            </button>
+          </div>
+          <div id="recent-txns-list" class="space-y-1.5 text-xs max-h-56 overflow-y-auto"></div>
+        </div>
+      </div>
+
+      <!-- TAB 2: Add / Edit Product Catalog -->
+      <div id="mgr-tab-products" class="hidden flex-1 overflow-y-auto space-y-4 pr-1">
+        <div class="bg-slate-900 p-4 rounded-xl border border-slate-700 space-y-3 text-xs">
+          <h4 class="text-sm font-bold text-white">Create New Product or Restock Existing Barcode</h4>
+          <p class="text-slate-400 text-[11px]">If the UPC/SKU already exists, its price/name will update and the stock quantity below will be added to current inventory.</p>
+          
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-slate-400 mb-1">UPC Barcode / SKU *</label>
+              <input id="inv-sku" type="text" placeholder="e.g. 028400090896" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-1">Product Name *</label>
+              <input id="inv-name" type="text" placeholder="e.g. Hot Cheetos 8.5oz" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-1">Category *</label>
+              <select id="inv-cat" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+                <option value="beverage">Beverage</option>
+                <option value="snacks">Snacks</option>
+                <option value="grocery">Grocery</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-1">Retail Price in Cents (e.g. 299 = $2.99) *</label>
+              <input id="inv-price" type="number" placeholder="299" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-1">Units to Add to Stock *</label>
+              <input id="inv-stock" type="number" value="24" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-1">Tax Status (8.25% TX Sales Tax)</label>
+              <select id="inv-taxable" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+                <option value="1">Taxable [T] (Soda, Snacks, Prepared)</option>
+                <option value="0">Tax-Exempt [NT] (Grocery / Milk / Produce)</option>
+              </select>
+            </div>
+          </div>
+
+          <button onclick="submitInventoryUpdate()" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 rounded-lg transition">
+            SAVE PRODUCT / ADD INVENTORY
+          </button>
+        </div>
+      </div>
+
+      <!-- TAB 3: Staff & PIN Management -->
+      <div id="mgr-tab-users" class="hidden flex-1 overflow-y-auto space-y-4 pr-1 text-xs">
+        <div class="bg-slate-900 p-4 rounded-xl border border-slate-700 space-y-3">
+          <h4 class="text-sm font-bold text-white">Add or Update Employee Operator PIN</h4>
+          <div class="grid grid-cols-4 gap-2">
+            <input id="usr-id" type="text" placeholder="EMP ID (e.g. CS-204)" class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white uppercase">
+            <input id="usr-name" type="text" placeholder="Full Name" class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+            <input id="usr-pin" type="text" maxlength="4" placeholder="4-Digit PIN (e.g. 5555)" class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+            <select id="usr-role" class="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white">
+              <option value="CASHIER">CASHIER</option>
+              <option value="MANAGER">MANAGER</option>
+            </select>
+          </div>
+          <button onclick="submitNewUser()" class="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-2 rounded-lg transition">
+            SAVE OPERATOR CREDENTIALS
+          </button>
+        </div>
+
+        <div>
+          <h4 class="text-xs uppercase text-slate-400 mb-2">Active Register Operators</h4>
+          <div id="users-list" class="space-y-1.5"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Register Script Engine -->
+  <script>
+    const API_URL = "http://127.0.0.1:8000/api";
+    let catalog = [];
+    let cart = [];
+    let currentUser = null;
+
+    setInterval(() => {
+      const clockEl = document.getElementById('clock');
+      if (clockEl) clockEl.textContent = new Date().toLocaleTimeString();
+    }, 1000);
+
+    // --- PIN Pad Authentication ---
+    function appendPin(digit) {
+      const pinInput = document.getElementById('pin-input');
+      document.getElementById('login-error').textContent = '';
+      if (pinInput.value.length < 4) pinInput.value += digit;
+      if (pinInput.value.length === 4) submitLogin();
+    }
+
+    function clearPin() {
+      document.getElementById('pin-input').value = '';
+      document.getElementById('login-error').textContent = '';
+    }
+
+    async function submitLogin() {
+      const pin = document.getElementById('pin-input').value;
+      if (!pin) return;
+
+      try {
+        const res = await fetch(`${API_URL}/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pin })
+        });
+
+        if (!res.ok) {
+          document.getElementById('login-error').textContent = 'INVALID OPERATOR PIN';
+          document.getElementById('pin-input').value = '';
+          return;
+        }
+
+        currentUser = await res.json();
+        document.getElementById('active-cashier').textContent = `${currentUser.emp_id} (${currentUser.name.split(' ')[0]})`;
+        document.getElementById('active-role').textContent = currentUser.role;
+        document.getElementById('pin-input').value = '';
+        document.getElementById('login-overlay').classList.add('hidden');
+
+        const auditBtn = document.getElementById('audit-btn');
+        if (currentUser.role === 'MANAGER') {
+          auditBtn.classList.remove('hidden');
+        } else {
+          auditBtn.classList.add('hidden');
+        }
+
+        await loadCatalog();
+        document.getElementById('barcode-input').focus();
+      } catch (err) {
+        document.getElementById('login-error').textContent = 'BACKEND OFFLINE';
+      }
+    }
+
+    function lockTerminal() {
+      currentUser = null;
+      closeAuditModal();
+      document.getElementById('pin-input').value = '';
+      document.getElementById('login-error').textContent = '';
+      document.getElementById('login-overlay').classList.remove('hidden');
+    }
+
+    // --- Catalog & Cart ---
+    async function loadCatalog(filter = 'all') {
+      try {
+        const res = await fetch(`${API_URL}/products`);
+        if (!res.ok) throw new Error("HTTP error " + res.status);
+        catalog = await res.json();
+        renderCatalog(filter);
+      } catch (err) {
+        console.error("Backend unreachable:", err);
+      }
+    }
+
+    function renderCatalog(filter = 'all') {
+      const grid = document.getElementById('product-grid');
+      if (!grid) return;
+      grid.innerHTML = '';
+      const items = filter === 'all' ? catalog : catalog.filter(p => p.category === filter);
+
+      items.forEach(product => {
+        const btn = document.createElement('button');
+        btn.onclick = () => addToCart(product.sku);
+        btn.className = "flex flex-col justify-between p-3 rounded-lg bg-slate-900/90 border border-slate-700 hover:border-cyan-500 hover:bg-slate-950 text-left transition group";
+        btn.innerHTML = `
+          <div>
+            <span class="text-[10px] mono text-slate-500 uppercase tracking-wider">${product.sku}</span>
+            <div class="text-sm font-semibold text-white group-hover:text-cyan-400 mt-0.5 line-clamp-1">${product.name}</div>
+          </div>
+          <div class="flex justify-between items-center mt-3 pt-2 border-t border-slate-800 text-xs mono">
+            <span class="text-slate-400">STK: ${product.stock}</span>
+            <span class="text-emerald-400 font-bold">$${(product.price_cents / 100).toFixed(2)}</span>
+          </div>
+        `;
+        grid.appendChild(btn);
+      });
+    }
+
+    function filterCategory(cat) {
+      document.querySelectorAll('.cat-btn').forEach(b => {
+        b.className = "cat-btn px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300";
+      });
+      if (window.event && window.event.target) {
+        window.event.target.className = "cat-btn px-3 py-1.5 rounded-lg bg-cyan-600 text-white font-bold";
+      }
+      renderCatalog(cat);
+    }
+
+    const barcodeInput = document.getElementById('barcode-input');
+    if (barcodeInput) {
+      barcodeInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') handleManualScan();
+      });
+    }
+
+    async function handleManualScan() {
+      if (!barcodeInput || !currentUser) return;
+      const code = barcodeInput.value.trim();
+      if (!code) return;
+
+      const found = catalog.find(p => p.sku === code);
+      if (found) {
+        addToCart(code);
+      } else {
+        try {
+          const res = await fetch(`${API_URL}/products/${code}`);
+          if (res.ok) {
+            const prod = await res.json();
+            catalog.push(prod);
+            addToCart(code);
+          } else {
+            alert("SKU Not Found: " + code);
+          }
+        } catch {
+          alert("Error fetching SKU: " + code);
+        }
+      }
+      barcodeInput.value = '';
+      barcodeInput.focus();
+    }
+
+    function addToCart(sku) {
+      if (!currentUser) return;
+      const product = catalog.find(p => p.sku === sku);
+      if (!product) return;
+      const existing = cart.find(item => item.sku === sku);
+      if (existing) {
+        if (existing.quantity + 1 > product.stock) {
+          alert("Exceeds current stock limit (" + product.stock + ")");
+          return;
+        }
+        existing.quantity += 1;
+      } else {
+        if (product.stock < 1) {
+          alert("OUT OF STOCK: " + product.name);
+          return;
+        }
+        cart.push({ ...product, quantity: 1 });
+      }
+      renderCart();
+    }
+
+    function updateQty(sku, delta) {
+      const item = cart.find(i => i.sku === sku);
+      if (!item) return;
+      item.quantity += delta;
+      if (item.quantity <= 0) cart = cart.filter(i => i.sku !== sku);
+      renderCart();
+    }
+
+    function calculateTotals() {
+      const subtotalCents = cart.reduce((acc, item) => acc + (item.price_cents * item.quantity), 0);
+      const taxableCents = cart.filter(item => item.taxable).reduce((acc, item) => acc + (item.price_cents * item.quantity), 0);
+      const taxCents = Math.round(taxableCents * 0.0825);
+      const totalCents = subtotalCents + taxCents;
+      return { subtotalCents, taxCents, totalCents };
+    }
+
+    function renderCart() {
+      const container = document.getElementById('cart-items');
+      if (!container) return;
+
+      if (cart.length === 0) {
+        container.innerHTML = '<div class="h-full flex items-center justify-center text-slate-500 mono text-sm">Awaiting scanned items...</div>';
+      } else {
+        container.innerHTML = cart.map(item => `
+          <div class="flex items-center justify-between bg-slate-900/80 p-2.5 rounded-lg border border-slate-700/60 text-xs mono">
+            <div class="flex-1 pr-2">
+              <div class="font-bold text-white">${item.name}</div>
+              <div class="text-slate-400">$${(item.price_cents / 100).toFixed(2)} ${item.taxable ? '<span class="text-amber-400 font-semibold">[T]</span>' : '<span class="text-slate-500">[NT]</span>'}</div>
+            </div>
+            <div class="flex items-center space-x-2">
+              <button onclick="updateQty('${item.sku}', -1)" class="w-6 h-6 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold">-</button>
+              <span class="w-5 text-center text-white font-bold">${item.quantity}</span>
+              <button onclick="updateQty('${item.sku}', 1)" class="w-6 h-6 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold">+</button>
+            </div>
+            <div class="w-20 text-right font-bold text-cyan-400">
+              $${((item.price_cents * item.quantity) / 100).toFixed(2)}
+            </div>
+          </div>
+        `).join('');
+      }
+
+      const { subtotalCents, taxCents, totalCents } = calculateTotals();
+      document.getElementById('summary-subtotal').textContent = `$${(subtotalCents / 100).toFixed(2)}`;
+      document.getElementById('summary-tax').textContent = `$${(taxCents / 100).toFixed(2)}`;
+      document.getElementById('summary-total').textContent = `$${(totalCents / 100).toFixed(2)}`;
+    }
+
+    function clearCart() {
+      cart = [];
+      renderCart();
+      if (barcodeInput) barcodeInput.focus();
+    }
+
+    function openCashModal() {
+      if (!currentUser || cart.length === 0) return;
+      const { totalCents } = calculateTotals();
+      document.getElementById('modal-due').textContent = `$${(totalCents / 100).toFixed(2)}`;
+      document.getElementById('cash-tendered-input').value = (totalCents / 100).toFixed(2);
+      document.getElementById('cash-modal').classList.remove('hidden');
+      document.getElementById('cash-tendered-input').select();
+    }
+
+    function closeCashModal() {
+      document.getElementById('cash-modal').classList.add('hidden');
+      if (barcodeInput) barcodeInput.focus();
+    }
+
+    function tenderPreset(val) {
+      const { totalCents } = calculateTotals();
+      const input = document.getElementById('cash-tendered-input');
+      input.value = val === 'exact' ? (totalCents / 100).toFixed(2) : (val / 100).toFixed(2);
+    }
+
+    async function finalizeCashTransaction() {
+      const { totalCents } = calculateTotals();
+      const tendered = Math.round(parseFloat(document.getElementById('cash-tendered-input').value || 0) * 100);
+      if (tendered < totalCents) {
+        alert("Tender amount is less than total balance due.");
+        return;
+      }
+      await submitCheckout("CASH", tendered);
+      closeCashModal();
+    }
+
+    async function processCardPayment() {
+      if (!currentUser || cart.length === 0) return;
+      const { totalCents } = calculateTotals();
+      if (confirm(`Authorize Card EMV transaction for $${(totalCents / 100).toFixed(2)}?`)) {
+        await submitCheckout("CARD", totalCents);
+      }
+    }
+
+    async function submitCheckout(paymentType, tenderedCents) {
+      const payload = {
+        items: cart.map(i => ({ sku: i.sku, quantity: i.quantity })),
+        payment_type: paymentType,
+        tendered_cents: tenderedCents,
+        cashier_id: currentUser ? currentUser.emp_id : "JJ-8042"
+      };
+
+      try {
+        const res = await fetch(`${API_URL}/checkout`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          alert("Checkout Error: " + err.detail);
+          return;
+        }
+        const data = await res.json();
+        showReceipt(data);
+        await loadCatalog();
+      } catch (err) {
+        alert("Transaction failed to process: " + err.message);
+      }
+    }
+
+    function showReceipt(data) {
+      document.getElementById('receipt-date').textContent = new Date(data.created_at).toLocaleString();
+      document.getElementById('receipt-operator').textContent = `OPERATOR: ${data.cashier_id}`;
+      document.getElementById('rec-id').textContent = data.receipt_number;
+      document.getElementById('receipt-items').innerHTML = data.items.map(i => `
+        <div class="flex justify-between">
+          <span>${i.name.slice(0, 18)} x${i.quantity}</span>
+          <span>$${(i.line_total_cents / 100).toFixed(2)}</span>
+        </div>
+      `).join('');
+
+      document.getElementById('rec-subtotal').textContent = `$${(data.subtotal_cents / 100).toFixed(2)}`;
+      document.getElementById('rec-tax').textContent = `$${(data.tax_cents / 100).toFixed(2)}`;
+      document.getElementById('rec-total').textContent = `$${(data.total_cents / 100).toFixed(2)}`;
+      document.getElementById('rec-tendered').textContent = `$${(data.tendered_cents / 100).toFixed(2)} (${data.payment_type})`;
+      document.getElementById('rec-change').textContent = `$${(data.change_due_cents / 100).toFixed(2)}`;
+
+      clearCart();
+      document.getElementById('receipt-modal').classList.remove('hidden');
+    }
+
+    function closeReceiptModal() {
+      document.getElementById('receipt-modal').classList.add('hidden');
+      if (barcodeInput) barcodeInput.focus();
+    }
+
+    // --- Manager Console (Tabs: Z-Report, Products, Staff) ---
+    function switchManagerTab(tab) {
+      ['zreport', 'products', 'users'].forEach(t => {
+        document.getElementById(`mgr-tab-${t}`).classList.add('hidden');
+        document.getElementById(`tab-btn-${t}`).className = "px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 font-bold";
+      });
+      document.getElementById(`mgr-tab-${tab}`).classList.remove('hidden');
+      document.getElementById(`tab-btn-${tab}`).className = "px-4 py-2 rounded-lg bg-amber-600 text-white font-bold";
+
+      if (tab === 'zreport') loadShiftAudit();
+      if (tab === 'users') loadUsersList();
+    }
+
+    async function openAuditModal() {
+      if (!currentUser || currentUser.role !== 'MANAGER') {
+        alert("Manager privileges required.");
+        return;
+      }
+      document.getElementById('audit-modal').classList.remove('hidden');
+      switchManagerTab('zreport');
+    }
+
+    function closeAuditModal() {
+      document.getElementById('audit-modal').classList.add('hidden');
+      if (barcodeInput) barcodeInput.focus();
+    }
+
+    async function loadShiftAudit() {
+      try {
+        const res = await fetch(`${API_URL}/reports/shift`);
+        const data = await res.json();
+        document.getElementById('z-count').textContent = data.transaction_count;
+        document.getElementById('z-total').textContent = `$${(data.total_sales_cents / 100).toFixed(2)}`;
+        document.getElementById('z-cash').textContent = `$${(data.cash_collected_cents / 100).toFixed(2)}`;
+        document.getElementById('z-card').textContent = `$${(data.card_collected_cents / 100).toFixed(2)}`;
+
+        const list = document.getElementById('recent-txns-list');
+        if (!data.recent_transactions || data.recent_transactions.length === 0) {
+          list.innerHTML = '<div class="text-slate-500">No transactions recorded yet.</div>';
+        } else {
+          list.innerHTML = data.recent_transactions.map(t => `
+            <div class="flex items-center justify-between bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+              <div>
+                <span class="font-bold text-white">${t.receipt_number}</span>
+                <span class="text-slate-400 ml-2">Op: ${t.cashier_id}</span>
+              </div>
+              <div class="flex items-center space-x-3">
+                <span class="font-bold ${t.status === 'VOIDED' ? 'line-through text-rose-500' : 'text-emerald-400'}">
+                  $${(t.total_cents / 100).toFixed(2)}
+                </span>
+                ${t.status === 'COMPLETED' 
+                  ? `<button onclick="voidReceipt('${t.receipt_number}')" class="bg-rose-900/70 hover:bg-rose-700 text-rose-200 px-2 py-1 rounded text-[10px] font-bold">VOID</button>`
+                  : `<span class="text-[10px] text-rose-400 font-bold uppercase">VOIDED</span>`
+                }
+              </div>
+            </div>
+          `).join('');
+        }
+      } catch (err) {
+        console.error("Error loading shift report:", err);
+      }
+    }
+
+    async function voidReceipt(receiptNum) {
+      if (!confirm(`Void receipt ${receiptNum} and return items to stock?`)) return;
+      const res = await fetch(`${API_URL}/transactions/${receiptNum}/void`, { method: 'POST' });
+      if (res.ok) {
+        await loadShiftAudit();
+        await loadCatalog();
+      } else {
+        const err = await res.json();
+        alert("Void failed: " + err.detail);
+      }
+    }
+
+    async function submitInventoryUpdate() {
+      const sku = document.getElementById('inv-sku').value.trim();
+      const name = document.getElementById('inv-name').value.trim();
+      const category = document.getElementById('inv-cat').value;
+      const price_cents = parseInt(document.getElementById('inv-price').value || "0", 10);
+      const stock = parseInt(document.getElementById('inv-stock').value || "24", 10);
+      const taxable = parseInt(document.getElementById('inv-taxable').value, 10);
+
+      if (!sku || !name || price_cents <= 0) {
+        alert("Please enter a valid UPC/SKU, Product Name, and Price in cents.");
+        return;
+      }
+
+      const res = await fetch(`${API_URL}/products`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sku, name, category, price_cents, taxable, stock })
+      });
+
+      if (!res.ok) {
+        alert("Failed to save product.");
+        return;
+      }
+
+      document.getElementById('inv-sku').value = '';
+      document.getElementById('inv-name').value = '';
+      document.getElementById('inv-price').value = '';
+      await loadCatalog();
+      alert(`Saved "${name}" (+${stock} units)!`);
+    }
+
+    async function loadUsersList() {
+      const res = await fetch(`${API_URL}/users`);
+      const users = await res.json();
+      const list = document.getElementById('users-list');
+      list.innerHTML = users.map(u => `
+        <div class="flex items-center justify-between bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+          <div>
+            <span class="font-bold text-cyan-400">${u.emp_id}</span>
+            <span class="text-white ml-2">${u.name}</span>
+            <span class="ml-2 px-1.5 py-0.5 text-[10px] rounded ${u.role === 'MANAGER' ? 'bg-amber-500/20 text-amber-300' : 'bg-slate-800 text-slate-300'}">${u.role}</span>
+          </div>
+          <div class="flex items-center space-x-3">
+            <span class="text-slate-400">PIN: <strong class="text-white">${u.pin}</strong></span>
+            ${u.emp_id !== 'JJ-8042' 
+              ? `<button onclick="removeUser('${u.emp_id}')" class="bg-rose-900/70 hover:bg-rose-700 text-rose-200 px-2 py-1 rounded text-[10px] font-bold">REMOVE</button>`
+              : `<span class="text-[10px] text-slate-500">OWNER</span>`
+            }
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function submitNewUser() {
+      const emp_id = document.getElementById('usr-id').value.trim();
+      const name = document.getElementById('usr-name').value.trim();
+      const pin = document.getElementById('usr-pin').value.trim();
+      const role = document.getElementById('usr-role').value;
+
+      if (!emp_id || !name || pin.length !== 4) {
+        alert("Enter Employee ID, Full Name, and a 4-digit numeric PIN.");
+        return;
+      }
+
+      const res = await fetch(`${API_URL}/users`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ emp_id, name, pin, role })
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        alert("Error: " + err.detail);
+        return;
+      }
+
+      document.getElementById('usr-id').value = '';
+      document.getElementById('usr-name').value = '';
+      document.getElementById('usr-pin').value = '';
+      await loadUsersList();
+      alert(`Operator ${emp_id.toUpperCase()} saved!`);
+    }
+
+    async function removeUser(empId) {
+      if (!confirm(`Remove operator ${empId}?`)) return;
+      const res = await fetch(`${API_URL}/users/${empId}`, { method: 'DELETE' });
+      if (res.ok) loadUsersList();
+    }
+
+    window.addEventListener('keydown', (e) => {
+      if (!currentUser) {
+        if (e.key >= '0' && e.key <= '9') appendPin(e.key);
+        else if (e.key === 'Backspace' || e.key === 'Escape') clearPin();
+        else if (e.key === 'Enter') submitLogin();
+        return;
+      }
+
+      if (e.key === 'F1') { e.preventDefault(); openCashModal(); }
+      else if (e.key === 'F2') { e.preventDefault(); processCardPayment(); }
+      else if (e.key === 'F3') { e.preventDefault(); openAuditModal(); }
+      else if (e.key === 'F4') { e.preventDefault(); lockTerminal(); }
+      else if (e.key === 'Escape') { closeCashModal(); closeReceiptModal(); closeAuditModal(); }
+    });
+  </script>
+</body>
+</html>
